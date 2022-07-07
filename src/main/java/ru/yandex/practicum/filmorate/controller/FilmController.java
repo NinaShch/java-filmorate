@@ -21,7 +21,7 @@ import java.util.Optional;
 public class FilmController {
 
     private final FilmService filmService;
-    private final DirectorService directorService;                      //	insert from Oleg Sharomov
+    private final DirectorService directorService;
 
     @Autowired
     public FilmController(FilmService filmService, DirectorService directorService) {
@@ -53,6 +53,12 @@ public class FilmController {
         return filmService.updateFilm(film);
     }
 
+    @DeleteMapping("/{id}")
+    public void deleteFilmById(@PathVariable Long id){
+        log.info("Request to delete film by id = {}", id);
+        filmService.deleteFilmById(id);
+    }
+
     @PutMapping("/{id}/like/{userId}")
     public void likeFilm(@PathVariable Long id, @PathVariable Long userId) {
         log.info("Request from user id = {} put like to film id = {}", userId, id);
@@ -66,13 +72,20 @@ public class FilmController {
     }
 
     @GetMapping("/popular")
-    public Collection<Film> popularFilms(@RequestParam(required = false) Integer count) {
-        log.info("Request best films, count = {}", count);
+    public Collection<Film> popularFilms(@RequestParam(required = false) Integer count, Integer genreId, Integer year) {
+        log.info("Request best films, count = {}, genreId = {}, year = {}", count, genreId, year);
         if (count == null) count = 10;
-        System.out.println(count);
-        return filmService.getFilmsByRating(count);
+        if (genreId == null) genreId = -1;
+        if (year == null) year = -1;
+        return filmService.getFilmsByRating(count, genreId, year);
     }
-    //	the insert is made by Oleg Sharomov>>
+
+    @GetMapping("/common")
+    public Collection<Film> commonFilms(@RequestParam Long userId, Long friendId) {
+        log.info("Request common films of users with id {} and id {}", userId, friendId);
+        return filmService.getCommonFilms(userId, friendId);
+    }
+
     // GET /films/director/{directorId}?sortBy=year или /films/director/{directorId}?sortBy=likes
     @GetMapping("/director/{directorId}")
     public List<Film> getSortedFilmsByYearOrDirector(@PathVariable @Positive Long directorId,
@@ -80,5 +93,11 @@ public class FilmController {
         log.info("Received a request to get sorted films by director id = {}", directorId);
         return directorService.getSortedFilmsByDirectorId(directorId, sortBy);
     }
-    //	<<the end of the insert from Oleg Sharomov
+
+    @GetMapping("/search")
+    public List<Film> search(
+            @RequestParam(required = false) String query, String by) {
+        log.info("Request search films, query = {}, by = {}", query, by);
+        return filmService.search(query, by);
+    }
 }

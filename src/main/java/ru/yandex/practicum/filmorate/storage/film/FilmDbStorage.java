@@ -5,15 +5,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.SimpleJdbcInsert;
 import org.springframework.jdbc.support.rowset.SqlRowSet;
 import org.springframework.stereotype.Component;
+import ru.yandex.practicum.filmorate.exception.DirectorNotFoundException;
 import ru.yandex.practicum.filmorate.exception.FilmNotFoundException;
+import ru.yandex.practicum.filmorate.exception.NotImplementedException;
+import ru.yandex.practicum.filmorate.model.Director;
 import ru.yandex.practicum.filmorate.model.Film;
 import ru.yandex.practicum.filmorate.model.Genre;
+import ru.yandex.practicum.filmorate.storage.director.DirectorStorage;
 import ru.yandex.practicum.filmorate.storage.genre.GenreStorage;
 import ru.yandex.practicum.filmorate.storage.mpa.MpaStorage;
 
-import java.util.Collection;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 
 @Slf4j
 @Component("filmDbStorage")
@@ -22,13 +24,15 @@ public class FilmDbStorage implements FilmStorage {
     private final JdbcTemplate jdbcTemplate;
     private GenreStorage genreStorage;
     private MpaStorage mpaStorage;
+    private final DirectorStorage directorDao;
 
     public FilmDbStorage(JdbcTemplate jdbcTemplate,
                          GenreStorage genreStorage,
-                         MpaStorage mpaStorage) {
+                         MpaStorage mpaStorage, DirectorStorage directorDao) {
         this.jdbcTemplate = jdbcTemplate;
         this.genreStorage = genreStorage;
         this.mpaStorage = mpaStorage;
+        this.directorDao = directorDao;
     }
 
     @Override
@@ -43,11 +47,23 @@ public class FilmDbStorage implements FilmStorage {
                         film.getId(), genre.getId());
             }
         }
-            jdbcTemplate.update("UPDATE FILMS SET RATE_ID = ? WHERE FILM_ID = ?",
-                    film.getMpa().getId(),
-                    film.getId()
-            );
 
+        if (film.getDirectors() != null) {
+            for (Director director : film.getDirectors()) { // если режиссер есть - добавляет их в FILM_DIRECTOR
+                if (directorDao.isDirectorExists(director.getId())) {  //проверка присутствия режиссера в DIRECTORS
+                    jdbcTemplate.update("INSERT INTO FILM_DIRECTOR (film_id, director_id) VALUES (?, ?)",
+                            film.getId(), director.getId());
+                } else {
+                    throw new DirectorNotFoundException(String.format("Attempt to create film with " +
+                            "absent director id = %d", director.getId()));
+                }
+            }
+        }
+        film.setDirectors(directorDao.getDirectorsByFilmId(film.getId()));
+        jdbcTemplate.update("UPDATE FILMS SET RATE_ID = ? WHERE FILM_ID = ?",
+                film.getMpa().getId(),
+                film.getId()
+        );
         log.info("New film added: {}", film);
         return film;
     }
@@ -66,6 +82,7 @@ public class FilmDbStorage implements FilmStorage {
                     film.getMpa().getId(),
                     film.getId());
             genreStorage.updateGenresOfFilm(film);
+            directorDao.updateDirectorsOfFilm(film);
             log.info("Film {} has been successfully updated", film);
             return film;
         } else {
@@ -84,7 +101,8 @@ public class FilmDbStorage implements FilmStorage {
                 rs.getDate("releaseDate").toLocalDate(),
                 rs.getInt("duration"),
                 genreStorage.getFilmGenres(rs.getLong("film_id")),
-                mpaStorage.getMpa(rs.getInt("rate_id"))
+                mpaStorage.getMpa(rs.getInt("rate_id")),
+                directorDao.getDirectorsByFilmId(rs.getLong("film_id"))
         ));
     }
 
@@ -105,6 +123,7 @@ public class FilmDbStorage implements FilmStorage {
             if (genres.size() != 0) {
                 film.setGenres(genreStorage.getFilmGenres(id));
             }
+            film.setDirectors(directorDao.getDirectorsByFilmId(id));
             log.info("Found film id = {}", film);
             return Optional.of(film);
         } else {
@@ -113,18 +132,58 @@ public class FilmDbStorage implements FilmStorage {
     }
 
     @Override
-    public Film delete(Film film) {
-        if (isFilmExists(film.getId())) {
+    public void deleteById(Long filmId){
+        if (isFilmExists(filmId)) {
             String sql = "DELETE FROM FILMS WHERE film_id = ?";
-            jdbcTemplate.update(sql, film.getId());
-            return film;
+            jdbcTemplate.update(sql, filmId);
         } else throw new FilmNotFoundException(String.format("Attempt to delete film with " +
-                "absent id = %d", film.getId()));
+                "absent id = %d", filmId));
     }
 
     public boolean isFilmExists(Long id) {
         String sql = "SELECT * FROM FILMS WHERE film_id = ?";
         SqlRowSet userRows = jdbcTemplate.queryForRowSet(sql, id);
         return userRows.next();
+    }
+
+    @Override
+
+    public List<Film> searchByTitle(String query) {
+        String str = "%" + query + "%";
+        String sql = "SELECT * FROM FILMS WHERE LOWER(NAME) LIKE LOWER(?)";
+        return jdbcTemplate.query(sql, (rs, rowNum) -> new Film(
+                rs.getLong("film_id"),
+                rs.getString("name"),
+                rs.getString("description"),
+                rs.getDate("releaseDate").toLocalDate(),
+                rs.getInt("duration"),
+                genreStorage.getFilmGenres(rs.getLong("film_id")),
+                mpaStorage.getMpa(rs.getInt("rate_id")),
+                directorDao.getDirectorsByFilmId(rs.getLong("film_id"))
+        ), str);
+    }
+
+    @Override
+    public List<Film> searchByDirector(String query) {
+        String str = "%" + query + "%";
+        String sql = "select * from FILMS\n" +
+                "         left join FILM_DIRECTOR FD on FILMS.FILM_ID = FD.FILM_ID\n" +
+                "         left join DIRECTORS D on D.DIRECTOR_ID = FD.DIRECTOR_ID\n" +
+                "where lower(d.DIRECTOR_NAME) like lower(?);";
+        return jdbcTemplate.query(sql, (rs, rowNum) -> new Film(
+                rs.getLong("film_id"),
+                rs.getString("name"),
+                rs.getString("description"),
+                rs.getDate("releaseDate").toLocalDate(),
+                rs.getInt("duration"),
+                genreStorage.getFilmGenres(rs.getLong("film_id")),
+                mpaStorage.getMpa(rs.getInt("rate_id")),
+                directorDao.getDirectorsByFilmId(rs.getLong("film_id"))
+        ), str);
+}
+    public Film delete(Film film) {
+        deleteById(film.getId());
+        return film;
+
     }
 }
